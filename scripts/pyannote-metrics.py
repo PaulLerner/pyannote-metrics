@@ -33,7 +33,7 @@ Usage:
   pyannote-metrics.py detection [--subset=<subset> --collar=<seconds> --skip-overlap] <database.task.protocol> <hypothesis.rttm>
   pyannote-metrics.py segmentation [--subset=<subset> --tolerance=<seconds>] <database.task.protocol> <hypothesis.rttm>
   pyannote-metrics.py overlap [--subset=<subset> --collar=<seconds>] <database.task.protocol> <hypothesis.rttm>
-  pyannote-metrics.py diarization [--subset=<subset> --greedy --collar=<seconds> --skip-overlap] <database.task.protocol> <hypothesis.rttm>
+  pyannote-metrics.py diarization [--subset=<subset> --greedy --collar=<seconds> --skip-overlap --keep_top_k] <database.task.protocol> <hypothesis.rttm>
   pyannote-metrics.py identification [--subset=<subset> --collar=<seconds> --skip-overlap] <database.task.protocol> <hypothesis.rttm>
   pyannote-metrics.py spotting [--subset=<subset> --latency=<seconds>... --filter=<expression>...] <database.task.protocol> <hypothesis.json>
   pyannote-metrics.py -h | --help
@@ -51,6 +51,8 @@ Options:
                              expression; e.g. use --filter="speech>10" to skip
                              target trials with less than 10s of speech from
                              the target.
+  --keep_top_k               Evaluate the hypothesis by keeping only the `k` longest clusters
+                             With `k` being the number of speakers in the reference.
   -h --help                  Show this screen.
   --version                  Show version.
 
@@ -207,19 +209,28 @@ def get_hypothesis(hypotheses, current_file):
     msg = f'Found too many hypotheses matching file "{uri}" ({uris}).'
     raise ValueError(msg.format(uri=uri, uris=tmp_uri))
 
-
-def process_one(item, hypotheses=None, metrics=None):
+def process_one(item, hypotheses=None, metrics=None, keep_top_k=False):
     reference = item['annotation']
     hypothesis = get_hypothesis(hypotheses, item)
+    if keep_top_k:
+        k=len(reference.labels())
+        n_clusters=len(hypothesis.labels())
+        warnings.warn(
+            f"keeping only top {k} clusters (number of speakers in reference) "
+            f"out of {n_clusters}."
+            )
+        keep_labels=[label for label,_ in hypothesis.chart()[:k]]
+        hypothesis=hypothesis.subset(keep_labels)
     uem = get_annotated(item)
     return {key: metric(reference, hypothesis, uem=uem)
             for key, metric in metrics.items()}
 
-def get_reports(protocol, subset, hypotheses, metrics):
+def get_reports(protocol, subset, hypotheses, metrics, keep_top_k=False):
 
     process = functools.partial(process_one,
                                 hypotheses=hypotheses,
-                                metrics=metrics)
+                                metrics=metrics,
+                                keep_top_k=keep_top_k)
 
     # get items and their number
     progress = protocol.progress
@@ -319,7 +330,7 @@ def segmentation(protocol, subset, hypotheses, tolerance=0.5):
                    missingval="", showindex="default", disable_numparse=False))
 
 def diarization(protocol, subset, hypotheses, greedy=False,
-                collar=0.0, skip_overlap=False):
+                collar=0.0, skip_overlap=False, keep_top_k=False):
 
     options = {'collar': collar,
                'skip_overlap': skip_overlap,
@@ -334,7 +345,7 @@ def diarization(protocol, subset, hypotheses, greedy=False,
     else:
         metrics['error'] = DiarizationErrorRate(**options)
 
-    reports = get_reports(protocol, subset, hypotheses, metrics)
+    reports = get_reports(protocol, subset, hypotheses, metrics, keep_top_k)
 
     report = metrics['error'].report(display=False)
     purity = metrics['purity'].report(display=False)
@@ -558,6 +569,7 @@ if __name__ == '__main__':
     collar = float(arguments['--collar'])
     skip_overlap = arguments['--skip-overlap']
     tolerance = float(arguments['--tolerance'])
+    keep_top_k = arguments['--keep_top_k']
 
     # protocol
     protocol_name = arguments['<database.task.protocol>']
@@ -635,7 +647,7 @@ if __name__ == '__main__':
     if arguments['diarization']:
         greedy = arguments['--greedy']
         diarization(protocol, subset, hypotheses, greedy=greedy,
-                    collar=collar, skip_overlap=skip_overlap)
+                    collar=collar, skip_overlap=skip_overlap, keep_top_k=keep_top_k)
 
     if arguments['identification']:
         identification(protocol, subset, hypotheses,
