@@ -33,8 +33,8 @@ Usage:
   pyannote-metrics.py detection [--subset=<subset> --collar=<seconds> --skip-overlap] <database.task.protocol> <hypothesis.rttm>
   pyannote-metrics.py segmentation [--subset=<subset> --tolerance=<seconds>] <database.task.protocol> <hypothesis.rttm>
   pyannote-metrics.py overlap [--subset=<subset> --collar=<seconds>] <database.task.protocol> <hypothesis.rttm>
-  pyannote-metrics.py diarization [--subset=<subset> --greedy --collar=<seconds> --skip-overlap] <database.task.protocol> <hypothesis.rttm>
-  pyannote-metrics.py identification [--subset=<subset> --collar=<seconds> --skip-overlap] <database.task.protocol> <hypothesis.rttm>
+  pyannote-metrics.py diarization [--subset=<subset> --greedy --collar=<seconds> --skip-overlap --d_thresh=<d_thresh>] <database.task.protocol> <hypothesis.rttm>
+  pyannote-metrics.py identification [--subset=<subset> --collar=<seconds> --skip-overlap  --d_thresh=<d_thresh>] <database.task.protocol> <hypothesis.rttm>
   pyannote-metrics.py spotting [--subset=<subset> --latency=<seconds>... --filter=<expression>...] <database.task.protocol> <hypothesis.json>
   pyannote-metrics.py -h | --help
   pyannote-metrics.py --version
@@ -51,6 +51,8 @@ Options:
                              expression; e.g. use --filter="speech>10" to skip
                              target trials with less than 10s of speech from
                              the target.
+  --d_thresh=<d_thresh>      Hypothesis will not be evaluated when the distance to the
+                             reference is greater than `d_thresh` [default: None]
   -h --help                  Show this screen.
   --version                  Show version.
 
@@ -106,6 +108,7 @@ from tabulate import tabulate
 from pyannote.core import Timeline
 from pyannote.core import Annotation
 from pyannote.database.util import load_rttm
+from pyannote.database.util import load_id
 
 # evaluation protocols
 from pyannote.database import get_protocol
@@ -180,12 +183,14 @@ def get_hypothesis(hypotheses, current_file):
     -------
     hypothesis : `pyannote.core.Annotation`
         Hypothesis corresponding to `current_file`.
+    uri : `str`
+        uri matching with the hypotheses
     """
 
     uri = current_file['uri']
 
     if uri in hypotheses:
-        return hypotheses[uri]
+        return hypotheses[uri], uri
 
     # if the exact 'uri' is not available in hypothesis,
     # look for matching substring
@@ -195,31 +200,52 @@ def get_hypothesis(hypotheses, current_file):
     if len(tmp_uri) == 0:
         msg = f'Could not find hypothesis for file "{uri}"; assuming empty file.'
         warnings.warn(msg)
-        return Annotation(uri=uri, modality='speaker')
+        return Annotation(uri=uri, modality='speaker'), None
 
     # exactly one matching file. return it
     if len(tmp_uri) == 1:
         hypothesis = hypotheses[tmp_uri[0]]
         hypothesis.uri = uri
-        return hypothesis
+        return hypothesis, tmp_uri[0]
 
     # more that one matching file. error.
     msg = f'Found too many hypotheses matching file "{uri}" ({uris}).'
     raise ValueError(msg.format(uri=uri, uris=tmp_uri))
 
 
-def process_one(item, hypotheses=None, metrics=None):
+def process_one(item, hypotheses=None, metrics=None, distances=None,
+                distance_threshold=None):
     reference = item['annotation']
-    hypothesis = get_hypothesis(hypotheses, item)
+    hypothesis, uri = get_hypothesis(hypotheses, item)
+    distances = distances.get(uri) if distances else None
     uem = get_annotated(item)
+
+    if distances and distance_threshold:
+        warnings.warn(
+            f"Hypothesis won't be evaluated on segments "
+            f"with distance greater than {distance_threshold}"
+            )
+        old_uem = uem.copy()
+        uem = uem.empty()
+        for segment, track, label in hypothesis.itertracks(yield_label=True):
+            distance=distances.get(segment)
+            distance=distance.get(label) if distance else None
+            distance= distance if distance !="<NA>" else None
+            if distance:
+                if distance < distance_threshold:
+                    uem.add(segment)
+        uem = old_uem.crop(uem)
     return {key: metric(reference, hypothesis, uem=uem)
             for key, metric in metrics.items()}
 
-def get_reports(protocol, subset, hypotheses, metrics):
+def get_reports(protocol, subset, hypotheses, metrics, distances=None,
+                distance_threshold=None):
 
     process = functools.partial(process_one,
                                 hypotheses=hypotheses,
-                                metrics=metrics)
+                                metrics=metrics,
+                                distances=distances,
+                                distance_threshold=distance_threshold)
 
     # get items and their number
     progress = protocol.progress
@@ -318,8 +344,8 @@ def segmentation(protocol, subset, hypotheses, tolerance=0.5):
                    floatfmt=".2f", numalign="decimal", stralign="left",
                    missingval="", showindex="default", disable_numparse=False))
 
-def diarization(protocol, subset, hypotheses, greedy=False,
-                collar=0.0, skip_overlap=False):
+def diarization(protocol, subset, hypotheses, distances, greedy=False,
+                collar=0.0, skip_overlap=False, distance_threshold=None):
 
     options = {'collar': collar,
                'skip_overlap': skip_overlap,
@@ -334,7 +360,8 @@ def diarization(protocol, subset, hypotheses, greedy=False,
     else:
         metrics['error'] = DiarizationErrorRate(**options)
 
-    reports = get_reports(protocol, subset, hypotheses, metrics)
+    reports = get_reports(protocol, subset, hypotheses, metrics, distances,
+                          distance_threshold=distance_threshold)
 
     report = metrics['error'].report(display=False)
     purity = metrics['purity'].report(display=False)
@@ -361,8 +388,8 @@ def diarization(protocol, subset, hypotheses, greedy=False,
                    floatfmt=".2f", numalign="decimal", stralign="left",
                    missingval="", showindex="default", disable_numparse=False))
 
-def identification(protocol, subset, hypotheses,
-                   collar=0.0, skip_overlap=False):
+def identification(protocol, subset, hypotheses, distances,
+                   collar=0.0, skip_overlap=False, distance_threshold=None):
 
     options = {'collar': collar,
                'skip_overlap': skip_overlap,
@@ -373,7 +400,8 @@ def identification(protocol, subset, hypotheses,
         'precision': IdentificationPrecision(**options),
         'recall': IdentificationRecall(**options)}
 
-    reports = get_reports(protocol, subset, hypotheses, metrics)
+    reports = get_reports(protocol, subset, hypotheses, metrics, distances,
+                          distance_threshold=distance_threshold)
 
     report = metrics['error'].report(display=False)
     precision = metrics['precision'].report(display=False)
@@ -608,7 +636,7 @@ if __name__ == '__main__':
     hypothesis_rttm = arguments['<hypothesis.rttm>']
 
     try:
-        hypotheses = load_rttm(hypothesis_rttm)
+        hypotheses, distances = load_id(hypothesis_rttm)
 
     except FileNotFoundError:
         msg = f'Could not find file {hypothesis_rttm}.'
@@ -634,9 +662,13 @@ if __name__ == '__main__':
 
     if arguments['diarization']:
         greedy = arguments['--greedy']
-        diarization(protocol, subset, hypotheses, greedy=greedy,
-                    collar=collar, skip_overlap=skip_overlap)
+        distance_threshold = arguments['--d_thresh']
+        diarization(protocol, subset, hypotheses, distances, greedy=greedy,
+                    collar=collar, skip_overlap=skip_overlap,
+                    distance_threshold=distance_threshold)
 
     if arguments['identification']:
-        identification(protocol, subset, hypotheses,
-                       collar=collar, skip_overlap=skip_overlap)
+        distance_threshold = arguments['--d_thresh']
+        identification(protocol, subset, hypotheses, distances,
+                       collar=collar, skip_overlap=skip_overlap,
+                       distance_threshold=distance_threshold)
