@@ -52,7 +52,7 @@ Options:
                              target trials with less than 10s of speech from
                              the target.
   --d_thresh=<d_thresh>      Hypothesis will not be evaluated when the distance to the
-                             reference is greater than `d_thresh` [default: None]
+                             reference is greater than `d_thresh`. Defaults to None
   -h --help                  Show this screen.
   --version                  Show version.
 
@@ -662,13 +662,13 @@ if __name__ == '__main__':
 
     if arguments['diarization']:
         greedy = arguments['--greedy']
-        distance_threshold = arguments['--d_thresh']
+        distance_threshold = float(arguments['--d_thresh']) if arguments['--d_thresh'] else None
         diarization(protocol, subset, hypotheses, distances, greedy=greedy,
                     collar=collar, skip_overlap=skip_overlap,
                     distance_threshold=distance_threshold)
 
     if arguments['identification']:
-        distance_threshold = arguments['--d_thresh']
+        distance_threshold = float(arguments['--d_thresh']) if arguments['--d_thresh'] else None
         identification(protocol, subset, hypotheses, distances,
                        collar=collar, skip_overlap=skip_overlap,
                        distance_threshold=distance_threshold)
