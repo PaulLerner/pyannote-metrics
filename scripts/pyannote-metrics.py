@@ -41,7 +41,7 @@ Usage:
 
 Options:
   <database.task.protocol>   Set evaluation protocol (e.g. "Etape.SpeakerDiarization.TV")
-  --subset=<subset>          Evaluated subset (train|developement|test) [default: test]
+  --subset=<subset>          Evaluated subset (train|development|test) [default: test]
   --collar=<seconds>         Collar, in seconds [default: 0.0].
   --skip-overlap             Do not evaluate overlap regions.
   --tolerance=<seconds>      Tolerance, in seconds [default: 0.5].
